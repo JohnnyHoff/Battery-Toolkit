@@ -9,7 +9,8 @@ import os.log
 @main
 @MainActor
 internal final class BTAppDelegate: NSObject, NSApplicationDelegate {
-    private var menuBarExtraItem: NSStatusItem?
+    private var menuBarStatusItemController: BTBatteryStatusItemController?
+    private var showMenuBarPercentageObserver: NSObjectProtocol?
     @IBOutlet private var menuBarExtraMenu: NSMenu!
 
     @IBOutlet private var settingsItem: NSMenuItem!
@@ -24,6 +25,8 @@ internal final class BTAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_: Notification) {
+        self.teardownMenuBarStatusItem()
+
         Task { @BTBackgroundActor in
             BTActions.stop()
         }
@@ -31,10 +34,10 @@ internal final class BTAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillBecomeActive(_: Notification) {
         //
-        // Use the menuBarExtraItem value as an indicator for whether the app
+        // Use the menuBarStatusItemController value as an indicator for whether the app
         // has fully initialized.
         //
-        guard self.menuBarExtraItem != nil else {
+        guard self.menuBarStatusItemController != nil else {
             return
         }
 
@@ -42,7 +45,7 @@ internal final class BTAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillResignActive(_: Notification) {
-        guard self.menuBarExtraItem != nil else {
+        guard self.menuBarStatusItemController != nil else {
             return
         }
 
@@ -60,6 +63,8 @@ internal final class BTAppDelegate: NSObject, NSApplicationDelegate {
         case .notRegistered:
             os_log("Daemon not registered")
 
+            self.teardownMenuBarStatusItem()
+
             if BTAppPrompts.promptRegisterDaemonError() {
                 let status = await BTActions.startDaemon()
                 await self.daemonStatusHandler(status: status)
@@ -73,30 +78,35 @@ internal final class BTAppDelegate: NSObject, NSApplicationDelegate {
                 self.disableBackgroundItem.isEnabled = true
                 self.settingsItem.isEnabled = true
                 self.commandsMenuItem.isHidden = false
-                
-                let image = NSImage(
-                    named: NSImage.Name("ExtraItemIcon")
+
+                if self.menuBarStatusItemController == nil {
+                    self.menuBarStatusItemController = BTBatteryStatusItemController(
+                        menu: self.menuBarExtraMenu
+                    )
+                }
+
+                self.installMenuBarPercentageObserver()
+
+                let showPercentage = UserDefaults.standard.bool(
+                    forKey: BTAppPreferences.Keys.showMenuBarPercentage
                 )
-                image?.isTemplate = true
-                
-                let extraItem = NSStatusBar.system.statusItem(
-                    withLength: NSStatusItem.squareLength
-                )
-                extraItem.button?.image = image
-                extraItem.menu = self.menuBarExtraMenu
-                self.menuBarExtraItem = extraItem
-                
+                self.menuBarStatusItemController?.setShowsPercentage(showPercentage)
+
                 if !NSApp.isActive {
                     BTAccessoryMode.activate()
                 }
             } catch BTError.unsupported {
+                self.teardownMenuBarStatusItem()
                 await BTAppPrompts.promptMachineUnsupported()
             } catch {
+                self.teardownMenuBarStatusItem()
                 BTErrorHandler.errorHandler(error: error)
             }
 
         case .requiresApproval:
             os_log("Daemon requires approval")
+
+            self.teardownMenuBarStatusItem()
 
             do {
                 try await BTAppPrompts.promptApproveDaemon(timeout: 20)
@@ -107,6 +117,8 @@ internal final class BTAppDelegate: NSObject, NSApplicationDelegate {
 
         case .requiresUpgrade:
             os_log("Daemon requires upgrade")
+
+            self.teardownMenuBarStatusItem()
 
             let storyboard = NSStoryboard(
                 name: "Upgrading",
@@ -121,5 +133,44 @@ internal final class BTAppDelegate: NSObject, NSApplicationDelegate {
             upgradingController.close()
             await self.daemonStatusHandler(status: status)
         }
+    }
+
+    private func installMenuBarPercentageObserver() {
+        guard self.showMenuBarPercentageObserver == nil else {
+            return
+        }
+
+        self.showMenuBarPercentageObserver = NotificationCenter.default.addObserver(
+            forName: .btShowMenuBarPercentageChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self else {
+                return
+            }
+
+            let storedValue = UserDefaults.standard.bool(
+                forKey: BTAppPreferences.Keys.showMenuBarPercentage
+            )
+
+            guard let valueNumber = notification.userInfo?[
+                BTAppPreferences.NotificationUserInfoKey.value
+            ] as? NSNumber else {
+                self.menuBarStatusItemController?.setShowsPercentage(storedValue)
+                return
+            }
+
+            self.menuBarStatusItemController?.setShowsPercentage(valueNumber.boolValue)
+        }
+    }
+
+    private func teardownMenuBarStatusItem() {
+        if let observer = self.showMenuBarPercentageObserver {
+            NotificationCenter.default.removeObserver(observer)
+            self.showMenuBarPercentageObserver = nil
+        }
+
+        self.menuBarStatusItemController?.stop()
+        self.menuBarStatusItemController = nil
     }
 }
