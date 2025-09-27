@@ -9,6 +9,7 @@ import os.log
 @MainActor
 internal final class BTSettingsViewController: NSViewController {
     private let autostartSetting = "autostart"
+    private let showMenuBarPercentageSetting = BTAppPreferences.Keys.showMenuBarPercentage
     
     private var currentSettings: [String: NSObject & Sendable]? = nil
     
@@ -17,6 +18,7 @@ internal final class BTSettingsViewController: NSViewController {
     @IBOutlet private var powerTab: NSTabViewItem!
     
     @IBOutlet private var autostartSwitch: NSSwitch!
+    @IBOutlet private var showMenuBarPercentageSwitch: NSSwitch!
     
     @IBOutlet private var minChargeTextField: NSTextField!
     @IBOutlet private var minChargeSlider: NSSlider!
@@ -165,6 +167,25 @@ internal final class BTSettingsViewController: NSViewController {
             }
         }
     }
+
+    @IBAction private func showMenuBarPercentageSwitchChanged(_ sender: NSSwitch) {
+        let showPercentage = (sender.state == .on)
+
+        UserDefaults.standard.set(
+            showPercentage,
+            forKey: self.showMenuBarPercentageSetting
+        )
+
+        NotificationCenter.default.post(
+            name: .btShowMenuBarPercentageChanged,
+            object: nil,
+            userInfo: [
+                BTAppPreferences.NotificationUserInfoKey.value: NSNumber(
+                    value: showPercentage
+                ),
+            ]
+        )
+    }
     
     override func viewWillAppear() {
         super.viewWillAppear()
@@ -211,6 +232,11 @@ internal final class BTSettingsViewController: NSViewController {
             forKey: self.autostartSetting
         )
         self.autostartSwitch.state = autostart ? .on : .off
+
+        let showPercentage = UserDefaults.standard.bool(
+            forKey: self.showMenuBarPercentageSetting
+        )
+        self.showMenuBarPercentageSwitch.state = showPercentage ? .on : .off
     }
     
     private func initPowerState() async {
